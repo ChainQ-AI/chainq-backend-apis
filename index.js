@@ -32,7 +32,7 @@ app.use(
   expressJwt({
     secret: JWT_SECRET_KEY,
     algorithms: ["HS256"],
-  }).unless({ path: ["/login"] })
+  }).unless({ path: ["/login", "/"] })
 );
 
 // Error handling middleware for invalid tokens
