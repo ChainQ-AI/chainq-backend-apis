@@ -86,6 +86,10 @@ db.serialize(() => {
   console.log("Tables created or already exist");
 });
 
+app.get("/", (req, res) => {
+  res.send("Welcome to ChainQ!");
+});
+
 // ---------------------------------------------------------------------- Insert Queries
 
 // Add user (add user to user table)
