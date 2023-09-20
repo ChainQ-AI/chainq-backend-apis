@@ -25,6 +25,9 @@ const db = new sqlite3.Database("chat_database.db", (err) => {
   }
 });
 
+// const sqlite3TronData = require("sqlite3").verbose();
+const tronDataDB = new sqlite3.Database("tronData.db");
+
 app.use(cors());
 
 // Authorization middleware to protect routes
@@ -490,6 +493,30 @@ app.get("/getChatData/:chatId", (req, res) => {
     }
   );
 });
+
+// Execute SQL SELECT query endpoint (no authentication required)
+app.post("/executeQuery", (req, res) => {
+  const { query } = req.body;
+
+  // Check if the query is a SELECT query
+  if (!isSelectQuery(query)) {
+    return res.status(400).json({ message: "Only SELECT queries are allowed" });
+  }
+
+  // Execute the SELECT query on the tronData.db database
+  tronDataDB.all(query, (err, result) => {
+    if (err) {
+      return res.status(500).json({ message: "Error executing query" });
+    }
+    res.status(200).json({ result });
+  });
+});
+
+// Function to check if a query is a SELECT query
+function isSelectQuery(query) {
+  // Simple check to see if the query starts with "SELECT" (case-insensitive)
+  return /^SELECT/i.test(query.trim());
+}
 
 const port = 3001;
 app.listen(port, () => {
