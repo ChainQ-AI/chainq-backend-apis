@@ -343,7 +343,7 @@ app.get("/getUserChatsAndPrompts/:userAddress", (req, res) => {
 });
 
 // newly added endPoints 4 sept
-// Get user's chat IDs based on userAddress (protected route)
+// Get user's chat IDs along with chat titles based on userAddress (protected route)
 app.get("/getUserChatIds/:userAddress", (req, res) => {
   const { userAddress } = req.params;
   const authenticatedUserAddress = req.user.userAddress; // Extract user information from the JWT token
@@ -356,16 +356,24 @@ app.get("/getUserChatIds/:userAddress", (req, res) => {
     return;
   }
 
-  // Query the database to retrieve the user's chat IDs
+  // Query the database to retrieve the user's chat IDs and chat titles
   db.all(
-    "SELECT chatId FROM chats WHERE userAddress = ?",
+    "SELECT chatId, chatTitle FROM chats WHERE userAddress = ?",
     [userAddress],
     (err, chatRows) => {
       if (err) {
         res.status(500).json({ message: "Error retrieving user's chat IDs" });
       } else {
-        const chatIds = chatRows.map((chatRow) => chatRow.chatId);
-        res.status(200).json({ chatIds });
+        const chatData = chatRows.map((chatRow) => ({
+          chatId: chatRow.chatId,
+          chatTitle: chatRow.chatTitle,
+        }));
+
+        if (chatData.length === 0) {
+          res.status(404).json({ message: "No chat available" });
+        } else {
+          res.status(200).json({ chatData });
+        }
       }
     }
   );
