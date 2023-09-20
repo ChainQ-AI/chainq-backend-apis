@@ -92,23 +92,52 @@ app.get("/", (req, res) => {
 
 // ---------------------------------------------------------------------- Insert Queries
 
-// Add user (add user to user table)
+// Add user (add user to user table) or login user
 app.post("/login", (req, res) => {
   const { userAddress, signature } = req.body;
 
   const predefinedMessage = "hello";
   const address = TronWeb.Trx.verifyMessageV2(MSG_TO_SIGN, signature);
-  if (address === userAddress) {
-    // Signature is valid, create a JWT token for the user
-    const payload = {
-      userAddress, // You can include any user-related information here
-    };
-    const token = jwt.sign(payload, JWT_SECRET_KEY, { expiresIn: "1d" });
-    res.json({ token });
-  } else {
-    // Invalid signature
-    res.status(401).json({ message: "Invalid signature" });
-  }
+
+  // Check if the user already exists in the users table
+  db.get(
+    "SELECT userAddress FROM users WHERE userAddress = ?",
+    [userAddress],
+    (err, userRow) => {
+      if (err) {
+        res.status(500).json({ message: "Error checking user existence" });
+      } else if (userRow) {
+        // User already exists, create a JWT token for the user
+        const payload = {
+          userAddress, // You can include any user-related information here
+        };
+        const token = jwt.sign(payload, JWT_SECRET_KEY, { expiresIn: "1d" });
+        res.json({ token });
+      } else if (address === userAddress) {
+        // Signature is valid, create a JWT token for the user
+        const payload = {
+          userAddress, // You can include any user-related information here
+        };
+        const token = jwt.sign(payload, JWT_SECRET_KEY, { expiresIn: "1d" });
+
+        // Insert the user into the users table
+        db.run(
+          "INSERT INTO users (userAddress) VALUES (?)",
+          [userAddress],
+          (err) => {
+            if (err) {
+              res.status(500).json({ message: "Error adding user" });
+            } else {
+              res.json({ token });
+            }
+          }
+        );
+      } else {
+        // Invalid signature
+        res.status(401).json({ message: "Invalid signature" });
+      }
+    }
+  );
 });
 
 app.post("/chat", (req, res) => {
