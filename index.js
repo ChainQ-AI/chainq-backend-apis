@@ -812,7 +812,7 @@ app.get("/getChatData/:chatId", (req, res) => {
 //   });
 // });
 
-// chat endpoint
+// dummy chat endpoint to save open AI creds (only for testing purpose)(same as /chat endpoint)
 app.post("/dummyChat", async (req, res) => {
   const { userAddress, chatId, promptText } = req.body;
   const authenticatedUserAddress = req.user.userAddress;
@@ -997,6 +997,58 @@ app.post("/dummyChat", async (req, res) => {
         }
       }
     );
+  }
+});
+
+app.post("/dummyDappChat", async (req, res) => {
+  const { userAddress, dappAddress, promptText, chatHistory } = req.body;
+  const authenticatedUserAddress = req.user.userAddress;
+  let executedQuery;
+  let responseText;
+
+  if (userAddress !== authenticatedUserAddress) {
+    res
+      .status(401)
+      .json({ message: "You are not authorized to perform this action" });
+    return;
+  }
+
+  try {
+    const timestamp = new Date().toISOString();
+
+    // if (chatHistory) {
+    //   responseText = await generateResponse(
+    //     promptText,
+    //     userAddress,
+    //     dappAddress,
+    //     chatHistory
+    //   );
+    // } else {
+    //   responseText = await generateResponse(
+    //     promptText,
+    //     userAddress,
+    //     dappAddress
+    //   );
+    // }
+
+    responseText =
+      "SELECT *\nFROM transactions\nWHERE (fromAddress = 'TP7rcxBJp4FxJCgWKdK8Ay1rj6fTY8vRFi' OR toAddress = 'TP7rcxBJp4FxJCgWKdK8Ay1rj6fTY8vRFi' OR ownerAddress = 'TP7rcxBJp4FxJCgWKdK8Ay1rj6fTY8vRFi') \n      AND (fromAddress = '0xrcxBJp4FxJCgWKdK8Ay1rj6' OR toAddress = '0xrcxBJp4FxJCgWKdK8Ay1rj6' OR ownerAddress = '0xrcxBJp4FxJCgWKdK8Ay1rj6')\nORDER BY timestamp DESC\nLIMIT 5;";
+
+    if (responseText && isSelectQuery(responseText)) {
+      executedQuery = await executeQuery(responseText);
+
+      res.status(200).json({
+        message: "Response generated successfully",
+        responseText,
+        executedQuery,
+        timestamp,
+      });
+    } else {
+      res.status(400).json({ message: "Invalid or non-SELECT query" });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "An error occurred" });
   }
 });
 
