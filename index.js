@@ -77,6 +77,7 @@ db.serialize(() => {
       userAddress TEXT,
       chatId TEXT PRIMARY KEY,
       chatTitle TEXT,
+      timestamp TEXT,
       FOREIGN KEY (userAddress) REFERENCES users (userAddress)
     )
   `);
@@ -88,6 +89,7 @@ db.serialize(() => {
       promptId TEXT PRIMARY KEY,
       promptText TEXT,
       responseText TEXT,
+      timestamp TEXT,
       FOREIGN KEY (userAddress, chatId) REFERENCES chats (userAddress, chatId)
     )
   `);
@@ -95,6 +97,7 @@ db.serialize(() => {
   console.log("Tables created or already exist");
 });
 
+// Default routes
 app.get("/", (req, res) => {
   res.send("Welcome to ChainQ!");
 });
@@ -175,38 +178,88 @@ const executeQuery = async (query) => {
 // }
 // gett();
 
-const generateResponse = async (queryToTranslate) => {
+// Function to check if a query is a SELECT query
+function isSelectQuery(query) {
+  // Simple check to see if the query starts with "SELECT" (case-insensitive)
+  return /^SELECT/i.test(query.trim());
+}
+
+// Function to generate the response (It will talk to OPEN AI APIs)
+const generateResponse = async (queryToTranslate, chatHistory = []) => {
   // Define the constant part of the user prompt and system prompt
   const systemPrompt =
     "you are a text-to-SQL translator. You write SQLite3 code based on plain-language prompts.";
-  const userPromptTemplate =
-    " - Language SQLite3\n - There are 2 tables namely: blocks, transaction_data, \n - columns for block_data = [\n    blockHash TEXT,\n    parentHash TEXT,\n    blockNumber INTEGER PRIMARY KEY,\n    timeStamp INTEGER,\n    baseFeePerGas INTEGER,\n    difficulty TEXT,\n    logsBloom TEXT,\n    miner TEXT,\n    mixHash TEXT,\n    nonce TEXT,\n    receiptsRoot TEXT,\n    sha3Uncles TEXT,\n    size INTEGER,\n    stateRoot TEXT,\n    totalDifficulty TEXT,\n    transactionsRoot TEXT,\n    uncles TEXT,\n    gasLimit TEXT,\n    gasUsed INTEGER,\n    extraData TEXT],\n\n    - columns for transaction_data: [\n    blockHash TEXT,\n    blockNumber INTEGER,\n    fromAddress TEXT,\n    gas INTEGER,\n    gasPrice INTEGER,\n    hash TEXT,\n    input TEXT,\n    maxFeePerGas INTEGER,\n    maxPriorityFeePerGas INTEGER,\n    nonce INTEGER,\n    r TEXT,\n    s TEXT,\n    toAddress TEXT,\n    transactionIndex INTEGER,\n    type TEXT,\n    v INTEGER,\n    value TEXT\n    ]\n    - these are the only columns, never give output outside from this column\n    - Block_data table consists of data of a blockchain's block data\n    - transaction_data consists of transaction data\nYou are a SQL code translator. Your role is to translate natural language to SQLite3 query. Your only output should be SQL code. Do not include any other text. Only SQL code.";
+  // const userPromptTemplate =
+  //   " - Language SQLite3\n - There are 2 tables namely: blocks, transaction_data, \n - columns for block_data = [\n    blockHash TEXT,\n    parentHash TEXT,\n    blockNumber INTEGER PRIMARY KEY,\n    timeStamp INTEGER,\n    baseFeePerGas INTEGER,\n    difficulty TEXT,\n    logsBloom TEXT,\n    miner TEXT,\n    mixHash TEXT,\n    nonce TEXT,\n    receiptsRoot TEXT,\n    sha3Uncles TEXT,\n    size INTEGER,\n    stateRoot TEXT,\n    totalDifficulty TEXT,\n    transactionsRoot TEXT,\n    uncles TEXT,\n    gasLimit TEXT,\n    gasUsed INTEGER,\n    extraData TEXT],\n\n    - columns for transaction_data: [\n    blockHash TEXT,\n    blockNumber INTEGER,\n    fromAddress TEXT,\n    gas INTEGER,\n    gasPrice INTEGER,\n    hash TEXT,\n    input TEXT,\n    maxFeePerGas INTEGER,\n    maxPriorityFeePerGas INTEGER,\n    nonce INTEGER,\n    r TEXT,\n    s TEXT,\n    toAddress TEXT,\n    transactionIndex INTEGER,\n    type TEXT,\n    v INTEGER,\n    value TEXT\n    ]\n    - these are the only columns, never give output outside from this column\n    - Block_data table consists of data of a blockchain's block data\n    - transaction_data consists of transaction data\nYou are a SQL code translator. Your role is to translate natural language to SQLite3 query. Your only output should be SQL code. Do not include any other text. Only SQL code. And for every SQL query you generate the limit should be 10";
+
+  const userPromptTemplate = `
+    - Language: SQLite3
+    - There are 2 tables: blocks and transactions
+    - Columns for 'blocks' table:
+      - blockHash TEXT PRIMARY KEY
+      - parentHash TEXT
+      - blockNumber INTEGER
+      - timestamp TEXT
+      - witnessAddress TEXT
+      - version INTEGER
+      - witnessSignature TEXT
+  
+    - Columns for 'transactions' table:
+      - txID TEXT PRIMARY KEY
+      - blockHash TEXT
+      - blockNumber INTEGER
+      - fromAddress TEXT
+      - gasPrice INTEGER
+      - result TEXT
+      - input TEXT
+      - stakedAssetReleasedBalance INTEGER
+      - resource TEXT
+      - timestamp TEXT
+      - expiration TEXT
+      - toAddress TEXT
+      - amount REAL
+      - feeLimit REAL
+      - type TEXT
+      - ownerAddress TEXT
+      - contractAddress TEXT
+      - resourcesTakenFromAddress TEXT
+      - contractData TEXT
+  
+    - These are the only columns, never give output outside this column
+    - 'blocks' table consists of data from Tron blockchain's block data
+    - 'transactions' consists of transaction data
+  
+  You are a SQL code translator. Your role is to translate natural language to SQLite3 queries. Your only output should be SQL code. Do not include any other text. Only SQL code. And for every SQL query you generate, the limit should be 10.
+  `;
+
   try {
-    // // Combine the user prompt template with the specific query
-    // const userPrompt = `${userPromptTemplate}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.`;
+    // Combine the user prompt template with the specific query and chat history
+    const userPrompt = `${userPromptTemplate}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.\n${chatHistory.join(
+      "\n"
+    )}`;
 
-    // // Define the conversation for OpenAI
-    // const conversation = [
-    //   { role: "system", content: systemPrompt },
-    //   { role: "user", content: userPrompt },
-    // ];
+    // Define the conversation for OpenAI
+    const conversation = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ];
 
-    // // Call OpenAI to get the translation
-    // const completion = await openai.chat.completions.create({
-    //   model: "gpt-3.5-turbo",
-    //   messages: conversation,
-    // });
+    // Call OpenAI to get the translation
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: conversation,
+    });
 
-    // // Extract the translated SQL code from the response
-    // const sqlCode = completion.choices[0].message.content;
+    // Extract the translated SQL code from the response
+    const sqlCode = completion.choices[0].message.content;
 
-    // return sqlCode;
-    return "SELECT * FROM blocks LIMIT 10;";
+    return sqlCode;
   } catch (error) {
     console.error(error);
     throw new Error("An error occurred with the OpenAI API.");
   }
 };
+
 // chat endpoint
 app.post("/chat", async (req, res) => {
   const { userAddress, chatId, promptText } = req.body;
@@ -220,6 +273,8 @@ app.post("/chat", async (req, res) => {
     return;
   }
 
+  const timestamp = new Date().toISOString();
+
   const responseText = await generateResponse(promptText);
 
   if (responseText && isSelectQuery(responseText)) {
@@ -229,66 +284,97 @@ app.post("/chat", async (req, res) => {
   }
 
   if (chatId) {
-    db.get(
-      "SELECT chatTitle FROM chats WHERE userAddress = ? AND chatId = ?",
+    // Retrieve previous prompts and responses for the given chatId
+    db.all(
+      "SELECT promptText, responseText FROM prompts WHERE userAddress = ? AND chatId = ?",
       [userAddress, chatId],
-      (err, row) => {
+      async (err, chatHistoryRows) => {
         if (err) {
-          res.status(500).json({ message: "Error checking chat" });
-        } else {
-          if (row) {
-            const chatTitle = row.chatTitle;
-            db.get(
-              "SELECT MAX(CAST(SUBSTR(promptId, -1) AS INTEGER)) AS lastPromptNumber FROM prompts WHERE userAddress = ? AND chatId = ?",
-              [userAddress, chatId],
-              (err, row) => {
-                if (err) {
-                  res
-                    .status(500)
-                    .json({ message: "Error generating prompt number" });
-                } else {
-                  const lastPromptNumber = row
-                    ? parseInt(row.lastPromptNumber)
-                    : 0;
-                  const newPromptNumber = lastPromptNumber + 1;
-                  const newPromptId = `${userAddress}-${
-                    chatId.split("-")[1]
-                  }-${newPromptNumber}`;
-
-                  // Insert executedQuery into responseText field
-                  db.run(
-                    "INSERT OR IGNORE INTO prompts (userAddress, chatId, promptId, promptText, responseText) VALUES (?, ?, ?, ?, ?)",
-                    [
-                      userAddress,
-                      chatId,
-                      newPromptId,
-                      promptText,
-                      JSON.stringify(executedQuery),
-                    ],
-                    (err) => {
-                      if (err) {
-                        res
-                          .status(500)
-                          .json({ message: "Error adding prompt" });
-                      } else {
-                        res.status(201).json({
-                          message: "Prompt added successfully",
-                          chatId,
-                          chatTitle,
-                          promptId: newPromptId,
-                          responseText,
-                          executedQuery,
-                        });
-                      }
-                    }
-                  );
-                }
-              }
-            );
-          } else {
-            res.status(404).json({ message: "Chat not found" });
-          }
+          res.status(500).json({ message: "Error retrieving chat history" });
+          return;
         }
+
+        const chatHistory = chatHistoryRows.map(
+          (chatHistoryRow) =>
+            `${chatHistoryRow.promptText}\n${chatHistoryRow.responseText}`
+        );
+
+        // Generate the response using the chat history
+        const responseText = await generateResponse(promptText, chatHistory);
+
+        if (responseText && isSelectQuery(responseText)) {
+          executedQuery = await executeQuery(responseText);
+        } else {
+          return res
+            .status(400)
+            .json({ message: "Invalid or non-SELECT query" });
+        }
+
+        // Insert the new prompt into the database
+        db.get(
+          "SELECT chatTitle FROM chats WHERE userAddress = ? AND chatId = ?",
+          [userAddress, chatId],
+          (err, row) => {
+            if (err) {
+              res.status(500).json({ message: "Error checking chat" });
+            } else {
+              if (row) {
+                const chatTitle = row.chatTitle;
+                db.get(
+                  "SELECT MAX(CAST(SUBSTR(promptId, -1) AS INTEGER)) AS lastPromptNumber FROM prompts WHERE userAddress = ? AND chatId = ?",
+                  [userAddress, chatId],
+                  (err, row) => {
+                    if (err) {
+                      res
+                        .status(500)
+                        .json({ message: "Error generating prompt number" });
+                    } else {
+                      const lastPromptNumber = row
+                        ? parseInt(row.lastPromptNumber)
+                        : 0;
+                      const newPromptNumber = lastPromptNumber + 1;
+                      const newPromptId = `${userAddress}-${
+                        chatId.split("-")[1]
+                      }-${newPromptNumber}`;
+
+                      // Insert executedQuery into responseText field
+                      db.run(
+                        "INSERT OR IGNORE INTO prompts (userAddress, chatId, promptId, promptText, responseText, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                        [
+                          userAddress,
+                          chatId,
+                          newPromptId,
+                          promptText,
+                          JSON.stringify(executedQuery),
+                          timestamp,
+                        ],
+                        (err) => {
+                          if (err) {
+                            res
+                              .status(500)
+                              .json({ message: "Error adding prompt" });
+                          } else {
+                            res.status(201).json({
+                              message: "Prompt added successfully",
+                              chatId,
+                              chatTitle,
+                              promptId: newPromptId,
+                              responseText,
+                              executedQuery,
+                              timestamp,
+                            });
+                          }
+                        }
+                      );
+                    }
+                  }
+                );
+              } else {
+                res.status(404).json({ message: "Chat not found" });
+              }
+            }
+          }
+        );
       }
     );
   } else {
@@ -318,20 +404,21 @@ app.post("/chat", async (req, res) => {
 
           // Insert executedQuery into responseText field
           db.run(
-            "INSERT OR IGNORE INTO chats (userAddress, chatId, chatTitle) VALUES (?, ?, ?)",
-            [userAddress, newChatId, chatTitle],
+            "INSERT OR IGNORE INTO chats (userAddress, chatId, chatTitle, timestamp) VALUES (?, ?, ?, ?)",
+            [userAddress, newChatId, chatTitle, timestamp],
             (err) => {
               if (err) {
                 res.status(500).json({ message: "Error adding chat" });
               } else {
                 db.run(
-                  "INSERT OR IGNORE INTO prompts (userAddress, chatId, promptId, promptText, responseText) VALUES (?, ?, ?, ?, ?)",
+                  "INSERT OR IGNORE INTO prompts (userAddress, chatId, promptId, promptText, responseText, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                   [
                     userAddress,
                     newChatId,
                     newPromptId,
                     promptText,
                     JSON.stringify(executedQuery),
+                    timestamp,
                   ],
                   (err) => {
                     if (err) {
@@ -344,6 +431,7 @@ app.post("/chat", async (req, res) => {
                         promptId: newPromptId,
                         responseText,
                         executedQuery,
+                        timestamp,
                       });
                     }
                   }
@@ -412,7 +500,7 @@ app.get("/getUserChatsAndPrompts/:userAddress", (req, res) => {
   }
 
   db.all(
-    "SELECT chatId, chatTitle FROM chats WHERE userAddress = ?",
+    "SELECT chatId, chatTitle, timestamp FROM chats WHERE userAddress = ?",
     [userAddress],
     (err, chatRows) => {
       if (err) {
@@ -426,11 +514,12 @@ app.get("/getUserChatsAndPrompts/:userAddress", (req, res) => {
             const chat = {
               chatId: chatRow.chatId,
               chatTitle: chatRow.chatTitle,
+              timestamp: chatRow.timestamp,
               prompts: [],
             };
 
             db.all(
-              "SELECT promptId, promptText, responseText FROM prompts WHERE userAddress = ? AND chatId = ?",
+              "SELECT promptId, promptText, responseText, timestamp FROM prompts WHERE userAddress = ? AND chatId = ?",
               [userAddress, chatRow.chatId],
               (err, promptRows) => {
                 if (err) {
@@ -440,6 +529,7 @@ app.get("/getUserChatsAndPrompts/:userAddress", (req, res) => {
                     promptId: promptRow.promptId,
                     promptText: promptRow.promptText,
                     responseText: promptRow.responseText,
+                    timestamp: promptRow.timestamp,
                   }));
 
                   userChats.push(chat);
@@ -476,7 +566,7 @@ app.get("/getUserChatIds/:userAddress", (req, res) => {
 
   // Query the database to retrieve the user's chat IDs and chat titles
   db.all(
-    "SELECT chatId, chatTitle FROM chats WHERE userAddress = ?",
+    "SELECT chatId, chatTitle, timestamp FROM chats WHERE userAddress = ?",
     [userAddress],
     (err, chatRows) => {
       if (err) {
@@ -485,6 +575,7 @@ app.get("/getUserChatIds/:userAddress", (req, res) => {
         const chatData = chatRows.map((chatRow) => ({
           chatId: chatRow.chatId,
           chatTitle: chatRow.chatTitle,
+          timestamp: chatRow.timestamp,
         }));
 
         if (chatData.length === 0) {
@@ -519,7 +610,7 @@ app.get("/getChatPromptsAndResponses/:chatId", (req, res) => {
         // The authenticated user is authorized to access the chat
         // Retrieve all prompts and responses for the chat
         db.all(
-          "SELECT promptId, promptText, responseText FROM prompts WHERE chatId = ?",
+          "SELECT promptId, promptText, responseText, timestamp FROM prompts WHERE chatId = ?",
           [chatId],
           (err, promptRows) => {
             if (err) {
@@ -529,6 +620,7 @@ app.get("/getChatPromptsAndResponses/:chatId", (req, res) => {
                 promptId: promptRow.promptId,
                 promptText: promptRow.promptText,
                 responseText: promptRow.responseText,
+                timestamp: promptRow.timestamp,
               }));
               res.status(200).json({ promptsAndResponses });
             }
@@ -561,7 +653,7 @@ app.get("/getChatData/:chatId", (req, res) => {
         // The authenticated user is authorized to access the chat
         // Retrieve all prompts and responses for the chat
         db.all(
-          "SELECT promptText, responseText FROM prompts WHERE chatId = ?",
+          "SELECT promptText, responseText, timestamp FROM prompts WHERE chatId = ?",
           [chatId],
           (err, promptRows) => {
             if (err) {
@@ -570,6 +662,7 @@ app.get("/getChatData/:chatId", (req, res) => {
               const promptsAndResponses = promptRows.map((promptRow) => ({
                 promptText: promptRow.promptText,
                 responseText: promptRow.responseText,
+                timestamp: promptRow.timestamp,
               }));
               res.status(200).json({ promptsAndResponses });
             }
@@ -580,51 +673,213 @@ app.get("/getChatData/:chatId", (req, res) => {
   );
 });
 
-// Execute SQL SELECT query endpoint (no authentication required)
-app.post("/executeQuery", (req, res) => {
-  const { query } = req.body;
+// // Execute SQL SELECT query endpoint (no authentication required)
+// app.post("/executeQuery", (req, res) => {
+//   const { query } = req.body;
 
-  // Check if the query is a SELECT query
-  if (!isSelectQuery(query)) {
-    return res.status(400).json({ message: "Only SELECT queries are allowed" });
-  }
-
-  // Execute the SELECT query on the tronData.db database
-  tronDataDB.all(query, (err, result) => {
-    if (err) {
-      return res.status(500).json({ message: "Error executing query" });
-    }
-    res.status(200).json({ result });
-  });
-});
-
-// Function to check if a query is a SELECT query
-function isSelectQuery(query) {
-  // Simple check to see if the query starts with "SELECT" (case-insensitive)
-  return /^SELECT/i.test(query.trim());
-}
-
-// Define a function to execute an SQL query on the tronData.db database
-// function executeQuery(query, callback) {
 //   // Check if the query is a SELECT query
 //   if (!isSelectQuery(query)) {
-//     const error = new Error("Only SELECT queries are allowed");
-//     error.status = 400;
-//     return callback(error, null);
+//     return res.status(400).json({ message: "Only SELECT queries are allowed" });
 //   }
 
 //   // Execute the SELECT query on the tronData.db database
 //   tronDataDB.all(query, (err, result) => {
 //     if (err) {
-//       const error = new Error("Error executing query");
-//       error.status = 500;
-//       return callback(error, null);
+//       return res.status(500).json({ message: "Error executing query" });
 //     }
-//     callback(null, result);
+//     res.status(200).json({ result });
 //   });
-// }
+// });
 
-const port = 3001;
+// chat endpoint
+app.post("/dummyChat", async (req, res) => {
+  const { userAddress, chatId, promptText } = req.body;
+  const authenticatedUserAddress = req.user.userAddress;
+  let executedQuery;
+
+  if (userAddress !== authenticatedUserAddress) {
+    res
+      .status(401)
+      .json({ message: "You are not authorized to perform this action" });
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+
+  const responseText =
+    "SELECT * FROM 'blocks' ORDER BY blockNumber DESC LIMIT 3";
+
+  if (responseText && isSelectQuery(responseText)) {
+    executedQuery = await executeQuery(responseText);
+  } else {
+    return res.status(400).json({ message: "Invalid or non-SELECT query" });
+  }
+
+  if (chatId) {
+    // Retrieve previous prompts and responses for the given chatId
+    db.all(
+      "SELECT promptText, responseText FROM prompts WHERE userAddress = ? AND chatId = ?",
+      [userAddress, chatId],
+      async (err, chatHistoryRows) => {
+        if (err) {
+          res.status(500).json({ message: "Error retrieving chat history" });
+          return;
+        }
+
+        const chatHistory = chatHistoryRows.map(
+          (chatHistoryRow) =>
+            `${chatHistoryRow.promptText}\n${chatHistoryRow.responseText}`
+        );
+
+        // Generate the response using the chat history
+        // const responseText = await generateResponse(promptText, chatHistory);
+        const responseText =
+          "SELECT * FROM 'blocks' ORDER BY blockNumber DESC LIMIT 3";
+
+        if (responseText && isSelectQuery(responseText)) {
+          executedQuery = await executeQuery(responseText);
+        } else {
+          return res
+            .status(400)
+            .json({ message: "Invalid or non-SELECT query" });
+        }
+
+        // Insert the new prompt into the database
+        db.get(
+          "SELECT chatTitle FROM chats WHERE userAddress = ? AND chatId = ?",
+          [userAddress, chatId],
+          (err, row) => {
+            if (err) {
+              res.status(500).json({ message: "Error checking chat" });
+            } else {
+              if (row) {
+                const chatTitle = row.chatTitle;
+                db.get(
+                  "SELECT MAX(CAST(SUBSTR(promptId, -1) AS INTEGER)) AS lastPromptNumber FROM prompts WHERE userAddress = ? AND chatId = ?",
+                  [userAddress, chatId],
+                  (err, row) => {
+                    if (err) {
+                      res
+                        .status(500)
+                        .json({ message: "Error generating prompt number" });
+                    } else {
+                      const lastPromptNumber = row
+                        ? parseInt(row.lastPromptNumber)
+                        : 0;
+                      const newPromptNumber = lastPromptNumber + 1;
+                      const newPromptId = `${userAddress}-${
+                        chatId.split("-")[1]
+                      }-${newPromptNumber}`;
+
+                      // Insert executedQuery into responseText field
+                      db.run(
+                        "INSERT OR IGNORE INTO prompts (userAddress, chatId, promptId, promptText, responseText, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                        [
+                          userAddress,
+                          chatId,
+                          newPromptId,
+                          promptText,
+                          JSON.stringify(executedQuery),
+                          timestamp,
+                        ],
+                        (err) => {
+                          if (err) {
+                            res
+                              .status(500)
+                              .json({ message: "Error adding prompt" });
+                          } else {
+                            res.status(201).json({
+                              message: "Prompt added successfully",
+                              chatId,
+                              chatTitle,
+                              promptId: newPromptId,
+                              responseText,
+                              executedQuery,
+                              timestamp,
+                            });
+                          }
+                        }
+                      );
+                    }
+                  }
+                );
+              } else {
+                res.status(404).json({ message: "Chat not found" });
+              }
+            }
+          }
+        );
+      }
+    );
+  } else {
+    db.get(
+      "SELECT chatId FROM chats WHERE userAddress = ? ORDER BY chatId DESC LIMIT 1",
+      [userAddress],
+      (err, row) => {
+        if (err) {
+          res.status(500).json({ message: "Error generating chat ID" });
+        } else {
+          let lastChatIdNumericPart = 0;
+
+          if (row) {
+            const lastChatId = row.chatId;
+            const numericPartMatch = lastChatId.match(/\d+$/);
+
+            if (numericPartMatch) {
+              lastChatIdNumericPart = parseInt(numericPartMatch[0]);
+            }
+          }
+
+          const newChatNumber = lastChatIdNumericPart + 1;
+          const newChatId = `${userAddress}-${newChatNumber}`;
+          const chatTitle = promptText.substring(0, 20);
+
+          const newPromptId = `${userAddress}-${newChatNumber}-1`;
+
+          // Insert executedQuery into responseText field
+          db.run(
+            "INSERT OR IGNORE INTO chats (userAddress, chatId, chatTitle, timestamp) VALUES (?, ?, ?, ?)",
+            [userAddress, newChatId, chatTitle, timestamp],
+            (err) => {
+              if (err) {
+                res.status(500).json({ message: "Error adding chat" });
+              } else {
+                db.run(
+                  "INSERT OR IGNORE INTO prompts (userAddress, chatId, promptId, promptText, responseText, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                  [
+                    userAddress,
+                    newChatId,
+                    newPromptId,
+                    promptText,
+                    JSON.stringify(executedQuery),
+                    timestamp,
+                  ],
+                  (err) => {
+                    if (err) {
+                      res.status(500).json({ message: "Error adding prompt" });
+                    } else {
+                      res.status(201).json({
+                        message: "Chat and prompt added successfully",
+                        chatId: newChatId,
+                        chatTitle,
+                        promptId: newPromptId,
+                        responseText,
+                        executedQuery,
+                        timestamp,
+                      });
+                    }
+                  }
+                );
+              }
+            }
+          );
+        }
+      }
+    );
+  }
+});
+
+const port = 3002;
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
