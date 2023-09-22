@@ -185,7 +185,12 @@ function isSelectQuery(query) {
 }
 
 // Function to generate the response (It will talk to OPEN AI APIs)
-const generateResponse = async (queryToTranslate, chatHistory = []) => {
+const generateResponse = async (
+  queryToTranslate,
+  userAddress,
+  dappAddress,
+  chatHistory = []
+) => {
   // Define the constant part of the user prompt and system prompt
   const systemPrompt =
     "you are a text-to-SQL translator. You write SQLite3 code based on plain-language prompts.";
@@ -228,15 +233,79 @@ const generateResponse = async (queryToTranslate, chatHistory = []) => {
     - These are the only columns, never give output outside this column
     - 'blocks' table consists of data from Tron blockchain's block data
     - 'transactions' consists of transaction data
+    - Please ensure that you consider the following guidelines when generating responses to prompts:
+
+    1. Whenever the prompt makes reference to a personal entity, which includes mentions of "me," "mine," "my," "my EOA" (Externally Owned Account), or "my Address," please replace these references with the designated variable ${userAddress} and if only and only if there is this personal reference like this, then focus on utilizing the fields from the transactions table that correspond to the addresses involved in the transaction. You should primarily work with the following fields: fromAddress, toAddress, and ownerAddress.
+    
+    2. The purpose of using ${userAddress} is to create a SQL query. Specifically, use this variable as the central point of reference when constructing SQL queries.
+    
+    
   
   You are a SQL code translator. Your role is to translate natural language to SQLite3 queries. Your only output should be SQL code. Do not include any other text. Only SQL code. And for every SQL query you generate, the limit should be 10.
   `;
 
+  const userPromptTemplateForDapp = `
+    - Language: SQLite3
+    - There are 2 tables: blocks and transactions
+    - Columns for 'blocks' table:
+      - blockHash TEXT PRIMARY KEY
+      - parentHash TEXT
+      - blockNumber INTEGER
+      - timestamp TEXT
+      - witnessAddress TEXT
+      - version INTEGER
+      - witnessSignature TEXT
+  
+    - Columns for 'transactions' table:
+      - txID TEXT PRIMARY KEY
+      - blockHash TEXT
+      - blockNumber INTEGER
+      - fromAddress TEXT
+      - gasPrice INTEGER
+      - result TEXT
+      - input TEXT
+      - stakedAssetReleasedBalance INTEGER
+      - resource TEXT
+      - timestamp TEXT
+      - expiration TEXT
+      - toAddress TEXT
+      - amount REAL
+      - feeLimit REAL
+      - type TEXT
+      - ownerAddress TEXT
+      - contractAddress TEXT
+      - resourcesTakenFromAddress TEXT
+      - contractData TEXT
+  
+    - These are the only columns; never give output outside this column.
+    - 'blocks' table consists of data from Tron blockchain's block data.
+    - 'transactions' consists of transaction data.
+    - Please ensure that you consider the following guidelines when generating responses to prompts:
+
+    1. Whenever the prompt makes reference to a personal entity, which includes mentions of "me," "mine," "my," "my EOA" (Externally Owned Account), or "my Address," please replace these references with the designated variable ${userAddress} and if only and only if there is this personal reference like this, then focus on utilizing the fields from the transactions table that correspond to both ${userAddress} and ${dappAddress}. Check transactions involving both addresses as follows:
+    - (fromAddress = ${userAddress} OR toAddress = ${userAddress} OR ownerAddress = ${userAddress}) 
+      AND 
+      (fromAddress = ${dappAddress} OR toAddress = ${dappAddress} OR ownerAddress = ${dappAddress})
+
+    2. The purpose of using ${userAddress} and ${dappAddress} is to create a SQL query. Specifically, use these variables as the central points of reference when constructing SQL queries.
+    
+    3. The query should refer to both ${userAddress} and ${dappAddress} simultaneously, ensuring that transactions involving either of these addresses are considered.
+
+  You are a SQL code translator. Your role is to translate natural language to SQLite3 queries. Your only output should be SQL code. Do not include any other text. Only SQL code. And for every SQL query you generate, the limit should be 10.
+`;
+
   try {
-    // Combine the user prompt template with the specific query and chat history
-    const userPrompt = `${userPromptTemplate}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.\n${chatHistory.join(
-      "\n"
-    )}`;
+    let userPrompt;
+
+    if (dappAddress) {
+      userPrompt = `${userPromptTemplateForDapp}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.\n${chatHistory.join(
+        "\n"
+      )}`;
+    } else {
+      userPrompt = `${userPromptTemplate}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.\n${chatHistory.join(
+        "\n"
+      )}`;
+    }
 
     // Define the conversation for OpenAI
     const conversation = [
@@ -275,7 +344,7 @@ app.post("/chat", async (req, res) => {
 
   const timestamp = new Date().toISOString();
 
-  const responseText = await generateResponse(promptText);
+  const responseText = await generateResponse(promptText, userAddress);
 
   if (responseText && isSelectQuery(responseText)) {
     executedQuery = await executeQuery(responseText);
@@ -300,7 +369,11 @@ app.post("/chat", async (req, res) => {
         );
 
         // Generate the response using the chat history
-        const responseText = await generateResponse(promptText, chatHistory);
+        const responseText = await generateResponse(
+          promptText,
+          userAddress,
+          chatHistory
+        );
 
         if (responseText && isSelectQuery(responseText)) {
           executedQuery = await executeQuery(responseText);
@@ -442,6 +515,54 @@ app.post("/chat", async (req, res) => {
         }
       }
     );
+  }
+});
+
+app.post("/dappChat", async (req, res) => {
+  const { userAddress, dappAddress, promptText, chatHistory } = req.body;
+  const authenticatedUserAddress = req.user.userAddress;
+  let executedQuery;
+  let responseText;
+
+  if (userAddress !== authenticatedUserAddress) {
+    res
+      .status(401)
+      .json({ message: "You are not authorized to perform this action" });
+    return;
+  }
+
+  try {
+    const timestamp = new Date().toISOString();
+
+    if (chatHistory) {
+      responseText = await generateResponse(
+        promptText,
+        dappAddress,
+        chatHistory
+      );
+    } else {
+      responseText = await generateResponse(
+        promptText,
+        userAddress,
+        dappAddress
+      );
+    }
+
+    if (responseText && isSelectQuery(responseText)) {
+      executedQuery = await executeQuery(responseText);
+
+      res.status(200).json({
+        message: "Response generated successfully",
+        responseText,
+        executedQuery,
+        timestamp,
+      });
+    } else {
+      res.status(400).json({ message: "Invalid or non-SELECT query" });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "An error occurred" });
   }
 });
 
@@ -732,7 +853,7 @@ app.post("/dummyChat", async (req, res) => {
         );
 
         // Generate the response using the chat history
-        // const responseText = await generateResponse(promptText, chatHistory);
+        // const responseText = await generateResponse(promptText, userAddress, chatHistory);
         const responseText =
           "SELECT * FROM 'blocks' ORDER BY blockNumber DESC LIMIT 3";
 
