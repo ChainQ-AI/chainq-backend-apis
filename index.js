@@ -902,6 +902,11 @@ app.post("/dummyChat", async (req, res) => {
     return;
   }
 
+  const planStatus = await isPlanActive(userAddress);
+  if (!planStatus) {
+    return res.status(400).json({ message: "No active Plans, Buy plan first" });
+  }
+
   const timestamp = new Date().toISOString();
 
   const responseText =
@@ -1089,6 +1094,11 @@ app.post("/dummyDappChat", async (req, res) => {
       .status(401)
       .json({ message: "You are not authorized to perform this action" });
     return;
+  }
+
+  const planStatus = await isPlanActive(userAddress);
+  if (!planStatus) {
+    return res.status(400).json({ message: "No active Plans, Buy plan first" });
   }
 
   try {
