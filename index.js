@@ -8,13 +8,16 @@ const bodyParser = require("body-parser");
 const abi = require("./artifacts/chainq_abi.json");
 dotenv.config();
 
-const fullNode = "https://api.shasta.trongrid.io";
-const solidityNode = "https://api.shasta.trongrid.io";
-const eventServer = "https://api.shasta.trongrid.io";
-const privateKey =
-  "dc87014ffc544d500fb7130495bbcfd1166de1338f5632878d35f88eac114282";
+const privateKey = process.env.PRIVATE_KEY;
 
-const tronWeb = new TronWeb(fullNode, solidityNode, eventServer, privateKey);
+const tronWeb = new TronWeb({
+  fullNode: "https://api.shasta.trongrid.io",
+  solidityNode: "https://api.shasta.trongrid.io",
+  eventServer: "https://api.shasta.trongrid.io",
+  privateKey: privateKey,
+});
+
+// const tronWeb = new TronWeb(fullNode, solidityNode, eventServer, privateKey);
 
 // Importing JWT Packages
 const expressJwt = require("express-jwt");
