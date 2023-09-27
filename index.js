@@ -5,7 +5,16 @@ const TronWeb = require("tronweb");
 const cors = require("cors");
 const OpenAI = require("openai");
 const bodyParser = require("body-parser");
+const abi = require("./artifacts/chainq_abi.json");
 dotenv.config();
+
+const fullNode = "https://api.shasta.trongrid.io";
+const solidityNode = "https://api.shasta.trongrid.io";
+const eventServer = "https://api.shasta.trongrid.io";
+const privateKey =
+  "dc87014ffc544d500fb7130495bbcfd1166de1338f5632878d35f88eac114282";
+
+const tronWeb = new TronWeb(fullNode, solidityNode, eventServer, privateKey);
 
 // Importing JWT Packages
 const expressJwt = require("express-jwt");
@@ -14,6 +23,7 @@ const jwt = require("jsonwebtoken");
 // Secret key for JWT
 const JWT_SECRET_KEY = process.env.JWT_ENV;
 const MSG_TO_SIGN = process.env.MSG_TO_SIGN;
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -101,6 +111,34 @@ db.serialize(() => {
 app.get("/", (req, res) => {
   res.send("Welcome to ChainQ!");
 });
+
+const isPlanActive = async (userAddress) => {
+  try {
+    const connectedContract = await tronWeb.contract(abi, CONTRACT_ADDRESS);
+
+    // console.log("Connected to contract:", connectedContract);
+    // TLEtshxJESLRGLDMt4h8U2Ja9SfaqG8nkq
+    //4170a8c82203ea758aa490dbe96ad9e9c2b166f8c7
+
+    let txget = await connectedContract
+      .getSubscriptionStatus(userAddress)
+      .call();
+
+    // console.log("Subscription Status:", txget.hasSubscription);
+    return txget.hasSubscription;
+  } catch (error) {
+    console.error("An error occurred:", error.message);
+    return error.message;
+  }
+};
+
+// isPlanActive()
+//   .then(() => {
+//     console.log("Function completed successfully.");
+//   })
+//   .catch((error) => {
+//     console.error("Unhandled promise rejection:", error.message);
+//   });
 
 // ---------------------------------------------------------------------- Insert Queries
 
@@ -340,6 +378,10 @@ app.post("/chat", async (req, res) => {
       .status(401)
       .json({ message: "You are not authorized to perform this action" });
     return;
+  }
+  const planStatus = await isPlanActive(userAddress);
+  if (!planStatus) {
+    return res.status(400).json({ message: "No active Plans, Buy plan first" });
   }
 
   const timestamp = new Date().toISOString();
@@ -605,6 +647,38 @@ app.delete("/deleteChat/:chatId", (req, res) => {
       }
     }
   );
+});
+
+app.delete("/deleteUserData/:userAddress", (req, res) => {
+  const { userAddress } = req.params;
+  const authenticatedUserAddress = req.user.userAddress; // Extract user information from the JWT token
+
+  // Check if the requested userAddress matches the authenticated user's userAddress
+  if (userAddress !== authenticatedUserAddress) {
+    res
+      .status(401)
+      .json({ message: "You are not authorized to delete this user's data" });
+    return;
+  }
+
+  // Delete all chats and associated prompts for the specified userAddress
+  db.run("DELETE FROM prompts WHERE userAddress = ?", [userAddress], (err) => {
+    if (err) {
+      res.status(500).json({ message: "Error deleting prompts" });
+    } else {
+      db.run(
+        "DELETE FROM chats WHERE userAddress = ?",
+        [userAddress],
+        (err) => {
+          if (err) {
+            res.status(500).json({ message: "Error deleting chats" });
+          } else {
+            res.status(200).json({ message: "User data deleted successfully" });
+          }
+        }
+      );
+    }
+  });
 });
 
 // Get user chats and prompts based on userAddress (protected route)
@@ -1000,6 +1074,7 @@ app.post("/dummyChat", async (req, res) => {
   }
 });
 
+//deletes all user chatIDs (all user data)
 app.post("/dummyDappChat", async (req, res) => {
   const { userAddress, dappAddress, promptText, chatHistory } = req.body;
   const authenticatedUserAddress = req.user.userAddress;
