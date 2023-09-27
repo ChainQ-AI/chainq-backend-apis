@@ -9,6 +9,8 @@ const abi = require("./artifacts/chainq_abi.json");
 dotenv.config();
 
 const privateKey = process.env.PRIVATE_KEY;
+// Secret key for JWT
+const JWT_SECRET_KEY = process.env.JWT_ENV;
 
 const tronWeb = new TronWeb({
   fullNode: "https://api.shasta.trongrid.io",
@@ -17,15 +19,12 @@ const tronWeb = new TronWeb({
   privateKey: privateKey,
 });
 
-// const tronWeb = new TronWeb(fullNode, solidityNode, eventServer, privateKey);
-
 // Importing JWT Packages
 const expressJwt = require("express-jwt");
 const jwt = require("jsonwebtoken");
 
-// Secret key for JWT
-const JWT_SECRET_KEY = process.env.JWT_ENV;
 const MSG_TO_SIGN = process.env.MSG_TO_SIGN;
+console.log(MSG_TO_SIGN);
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 
 const openai = new OpenAI({
@@ -149,8 +148,16 @@ const isPlanActive = async (userAddress) => {
 app.post("/login", (req, res) => {
   const { userAddress, signature } = req.body;
 
-  const predefinedMessage = "hello";
-  const address = TronWeb.Trx.verifyMessageV2(MSG_TO_SIGN, signature);
+  try {
+    const address = TronWeb.Trx.verifyMessageV2(MSG_TO_SIGN, signature);
+    if (address !== userAddress) {
+      return res.status(401).json({ message: "Invalid Signature" });
+    }
+  } catch (err) {
+    return res
+      .status(401)
+      .json({ message: "INVALID_ARGUMENT: Invalid Signature size(bytes)" });
+  }
 
   // Check if the user already exists in the users table
   db.get(
@@ -166,7 +173,7 @@ app.post("/login", (req, res) => {
         };
         const token = jwt.sign(payload, JWT_SECRET_KEY, { expiresIn: "1d" });
         res.json({ token });
-      } else if (address === userAddress) {
+      } else {
         // Signature is valid, create a JWT token for the user
         const payload = {
           userAddress, // You can include any user-related information here
@@ -185,9 +192,6 @@ app.post("/login", (req, res) => {
             }
           }
         );
-      } else {
-        // Invalid signature
-        res.status(401).json({ message: "Invalid signature" });
       }
     }
   );
