@@ -279,6 +279,7 @@ const generateResponse = async (
     - 'blocks' table consists of data from Tron blockchain's block data
     - 'transactions' consists of transaction data
     - Please ensure that you consider the following guidelines when generating responses to prompts:
+    
 
     1. Whenever the prompt makes reference to a personal entity, which includes mentions of "me," "mine," "my," "my EOA" (Externally Owned Account), or "my Address," please replace these references with the designated variable ${userAddress} and if only and only if there is this personal reference like this, then focus on utilizing the fields from the transactions table that correspond to the addresses involved in the transaction. You should primarily work with the following fields: fromAddress, toAddress, and ownerAddress.
     
@@ -286,7 +287,9 @@ const generateResponse = async (
     
     
   
-  You are a SQL code translator. Your role is to translate natural language to SQLite3 queries. Your only output should be SQL code. Do not include any other text. Only SQL code. And for every SQL query you generate, the limit should be 10.
+  You are a SQL code translator. Your role is to translate natural language to SQLite3 queries. Your only output should be SQL code. Do not include any other text. Only SQL code. 
+  - Very important for every sql query the limit should be 10 only(everytime).
+  - very important: Always make a SELECT query only (Read only queries) (never make write queries)
   `;
 
   const userPromptTemplateForDapp = `
@@ -342,7 +345,8 @@ const generateResponse = async (
   try {
     let userPrompt;
 
-    if (dappAddress) {
+    // error code (when token limit gets exceeded)
+    /* if (dappAddress) {
       userPrompt = `${userPromptTemplateForDapp}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.\n${chatHistory.join(
         "\n"
       )}`;
@@ -356,8 +360,24 @@ const generateResponse = async (
     const conversation = [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
-    ];
+    ]; */
 
+    if (dappAddress) {
+      userPrompt = `${userPromptTemplateForDapp}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.`;
+    } else {
+      userPrompt = `${userPromptTemplate}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.`;
+    }
+
+    // Get the last user message from chatHistory
+    const lastUserMessage =
+      chatHistory.length > 0 ? chatHistory[chatHistory.length - 1] : "";
+
+    // Define the conversation with the system prompt, user prompt, and last user message
+    const conversation = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+      { role: "user", content: lastUserMessage },
+    ];
     // Call OpenAI to get the translation
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
@@ -370,7 +390,8 @@ const generateResponse = async (
     return sqlCode;
   } catch (error) {
     console.error(error);
-    throw new Error("An error occurred with the OpenAI API.");
+    // throw new Error("An error occurred with the OpenAI API.");
+    return "An error occurred with the OpenAI API.";
   }
 };
 
@@ -395,6 +416,9 @@ app.post("/chat", async (req, res) => {
 
   const responseText = await generateResponse(promptText, userAddress);
 
+  if (responseText.startsWith("An error occurred")) {
+    return res.status(400).json({ message: "OPEN AI Limit Exceeded" });
+  }
   if (responseText && isSelectQuery(responseText)) {
     executedQuery = await executeQuery(responseText);
   } else {
@@ -501,7 +525,7 @@ app.post("/chat", async (req, res) => {
     );
   } else {
     db.get(
-      "SELECT chatId FROM chats WHERE userAddress = ? ORDER BY chatId DESC LIMIT 1",
+      "SELECT MAX(CAST(SUBSTR(chatId, INSTR(chatId, '-') + 1) AS INTEGER)) AS lastChatNumber FROM chats WHERE userAddress = ?",
       [userAddress],
       (err, row) => {
         if (err) {
@@ -509,13 +533,8 @@ app.post("/chat", async (req, res) => {
         } else {
           let lastChatIdNumericPart = 0;
 
-          if (row) {
-            const lastChatId = row.chatId;
-            const numericPartMatch = lastChatId.match(/\d+$/);
-
-            if (numericPartMatch) {
-              lastChatIdNumericPart = parseInt(numericPartMatch[0]);
-            }
+          if (row && row.lastChatNumber !== null) {
+            lastChatIdNumericPart = row.lastChatNumber;
           }
 
           const newChatNumber = lastChatIdNumericPart + 1;
@@ -1019,8 +1038,9 @@ app.post("/dummyChat", async (req, res) => {
       }
     );
   } else {
+    // console.log("in else");
     db.get(
-      "SELECT chatId FROM chats WHERE userAddress = ? ORDER BY chatId DESC LIMIT 1",
+      "SELECT MAX(CAST(SUBSTR(chatId, INSTR(chatId, '-') + 1) AS INTEGER)) AS lastChatNumber FROM chats WHERE userAddress = ?",
       [userAddress],
       (err, row) => {
         if (err) {
@@ -1028,17 +1048,16 @@ app.post("/dummyChat", async (req, res) => {
         } else {
           let lastChatIdNumericPart = 0;
 
-          if (row) {
-            const lastChatId = row.chatId;
-            const numericPartMatch = lastChatId.match(/\d+$/);
-
-            if (numericPartMatch) {
-              lastChatIdNumericPart = parseInt(numericPartMatch[0]);
-            }
+          if (row && row.lastChatNumber !== null) {
+            lastChatIdNumericPart = row.lastChatNumber;
           }
+          // console.log(lastChatIdNumericPart);
 
           const newChatNumber = lastChatIdNumericPart + 1;
+          // console.log(newChatNumber);
           const newChatId = `${userAddress}-${newChatNumber}`;
+          // console.log("chatID:");
+          // console.log(newChatNumber);
           const chatTitle = promptText.substring(0, 20);
 
           const newPromptId = `${userAddress}-${newChatNumber}-1`;
