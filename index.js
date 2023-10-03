@@ -24,7 +24,7 @@ const expressJwt = require("express-jwt");
 const jwt = require("jsonwebtoken");
 
 const MSG_TO_SIGN = process.env.MSG_TO_SIGN;
-console.log(MSG_TO_SIGN);
+// console.log(MSG_TO_SIGN);
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 
 const openai = new OpenAI({
@@ -203,15 +203,20 @@ function isSelectQuery(query) {
 }
 
 const executeQuery = async (query) => {
-  return new Promise((resolve, reject) => {
-    tronDataDB.all(query, (err, queryResult) => {
-      if (err) {
-        reject(err); // Reject the promise if there's an error
-      } else {
-        resolve(queryResult); // Resolve the promise with the query result
-      }
+  try {
+    return await new Promise((resolve, reject) => {
+      tronDataDB.all(query, (err, queryResult) => {
+        if (err) {
+          console.error(err);
+          reject(err);
+        } else {
+          resolve(queryResult);
+        }
+      });
     });
-  });
+  } catch (error) {
+    console.error("An error occurred:", error);
+  }
 };
 
 // async function gett() {
@@ -236,6 +241,7 @@ const generateResponse = async (
   dappAddress,
   chatHistory = []
 ) => {
+  console.log(`coming up: ${chatHistory}`);
   // Define the constant part of the user prompt and system prompt
   const systemPrompt =
     "you are a text-to-SQL translator. You write SQLite3 code based on plain-language prompts.";
@@ -280,11 +286,9 @@ const generateResponse = async (
     - 'transactions' consists of transaction data
     - Please ensure that you consider the following guidelines when generating responses to prompts:
     
+    
 
-    1. Whenever the prompt makes reference to a personal entity, which includes mentions of "me," "mine," "my," "my EOA" (Externally Owned Account), or "my Address," please replace these references with the designated variable ${userAddress} and if only and only if there is this personal reference like this, then focus on utilizing the fields from the transactions table that correspond to the addresses involved in the transaction. You should primarily work with the following fields: fromAddress, toAddress, and ownerAddress.
-    
-    2. The purpose of using ${userAddress} is to create a SQL query. Specifically, use this variable as the central point of reference when constructing SQL queries.
-    
+   
     
   
   You are a SQL code translator. Your role is to translate natural language to SQLite3 queries. Your only output should be SQL code. Do not include any other text. Only SQL code. 
@@ -390,8 +394,23 @@ const generateResponse = async (
     return sqlCode;
   } catch (error) {
     console.error(error);
-    // throw new Error("An error occurred with the OpenAI API.");
-    return "An error occurred with the OpenAI API.";
+    console.log(`chatHistory ${chatHistory}`);
+    console.log(`chatHistory len ${chatHistory.length}`);
+    // Retry with modified chatHistory if an error occurs
+    if (chatHistory.length >= 0) {
+      // Remove the last response text but keep the prompt text
+
+      console.log(chatHistory.promptText);
+      return generateResponse(
+        queryToTranslate,
+        userAddress,
+        dappAddress,
+        chatHistory.promptText
+      );
+    } else {
+      // No more chat history to remove, return an error message
+      return "An error occurred with the OpenAI API.";
+    }
   }
 };
 
@@ -420,7 +439,12 @@ app.post("/chat", async (req, res) => {
     return res.status(400).json({ message: "OPEN AI Limit Exceeded" });
   }
   if (responseText && isSelectQuery(responseText)) {
-    executedQuery = await executeQuery(responseText);
+    try {
+      executedQuery = await executeQuery(responseText);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send("Internal Server Error");
+    }
   } else {
     return res.status(400).json({ message: "Invalid or non-SELECT query" });
   }
@@ -436,10 +460,12 @@ app.post("/chat", async (req, res) => {
           return;
         }
 
-        const chatHistory = chatHistoryRows.map(
-          (chatHistoryRow) =>
-            `${chatHistoryRow.promptText}\n${chatHistoryRow.responseText}`
-        );
+        const chatHistory = chatHistoryRows.map((chatHistoryRow) => ({
+          promptText: chatHistoryRow.promptText,
+          responseText: chatHistoryRow.responseText,
+        }));
+
+        console.log(chatHistory);
 
         // Generate the response using the chat history
         const responseText = await generateResponse(
@@ -449,7 +475,12 @@ app.post("/chat", async (req, res) => {
         );
 
         if (responseText && isSelectQuery(responseText)) {
-          executedQuery = await executeQuery(responseText);
+          try {
+            executedQuery = await executeQuery(responseText);
+          } catch (err) {
+            console.error(err);
+            res.status(500).send("Internal Server Error");
+          }
         } else {
           return res
             .status(400)
@@ -617,7 +648,12 @@ app.post("/dappChat", async (req, res) => {
     }
 
     if (responseText && isSelectQuery(responseText)) {
-      executedQuery = await executeQuery(responseText);
+      try {
+        executedQuery = await executeQuery(responseText);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send("Internal Server Error");
+      }
 
       res.status(200).json({
         message: "Response generated successfully",
@@ -936,7 +972,12 @@ app.post("/dummyChat", async (req, res) => {
     "SELECT * FROM 'blocks' ORDER BY blockNumber DESC LIMIT 3";
 
   if (responseText && isSelectQuery(responseText)) {
-    executedQuery = await executeQuery(responseText);
+    try {
+      executedQuery = await executeQuery(responseText);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send("Internal Server Error");
+    }
   } else {
     return res.status(400).json({ message: "Invalid or non-SELECT query" });
   }
@@ -963,7 +1004,12 @@ app.post("/dummyChat", async (req, res) => {
           "SELECT * FROM 'blocks' ORDER BY blockNumber DESC LIMIT 3";
 
         if (responseText && isSelectQuery(responseText)) {
-          executedQuery = await executeQuery(responseText);
+          try {
+            executedQuery = await executeQuery(responseText);
+          } catch (err) {
+            console.error(err);
+            res.status(500).send("Internal Server Error");
+          }
         } else {
           return res
             .status(400)
@@ -1146,7 +1192,12 @@ app.post("/dummyDappChat", async (req, res) => {
       "SELECT *\nFROM transactions\nWHERE (fromAddress = 'TP7rcxBJp4FxJCgWKdK8Ay1rj6fTY8vRFi' OR toAddress = 'TP7rcxBJp4FxJCgWKdK8Ay1rj6fTY8vRFi' OR ownerAddress = 'TP7rcxBJp4FxJCgWKdK8Ay1rj6fTY8vRFi') \n      AND (fromAddress = '0xrcxBJp4FxJCgWKdK8Ay1rj6' OR toAddress = '0xrcxBJp4FxJCgWKdK8Ay1rj6' OR ownerAddress = '0xrcxBJp4FxJCgWKdK8Ay1rj6')\nORDER BY timestamp DESC\nLIMIT 5;";
 
     if (responseText && isSelectQuery(responseText)) {
-      executedQuery = await executeQuery(responseText);
+      try {
+        executedQuery = await executeQuery(responseText);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send("Internal Server Error");
+      }
 
       res.status(200).json({
         message: "Response generated successfully",
