@@ -1,35 +1,25 @@
 const express = require("express");
 const sqlite3 = require("sqlite3").verbose();
 const dotenv = require("dotenv");
-const TronWeb = require("tronweb");
 const cors = require("cors");
-const OpenAI = require("openai");
+
 const bodyParser = require("body-parser");
-const abi = require("./artifacts/chainq_abi.json");
+
+// helper functions
+const verifySign = require("./helpers/verifyMessage");
+const isPlanActive = require("./helpers/planStatus");
+const isSelectQuery = require("./helpers/isSelectQuery");
+const executeQuery = require("./helpers/executeQuery");
+const generateResponse = require("./helpers/generateResponse");
+
 dotenv.config();
 
-const privateKey = process.env.PRIVATE_KEY;
 // Secret key for JWT
 const JWT_SECRET_KEY = process.env.JWT_ENV;
-
-const tronWeb = new TronWeb({
-  fullNode: "https://api.shasta.trongrid.io",
-  solidityNode: "https://api.shasta.trongrid.io",
-  eventServer: "https://api.shasta.trongrid.io",
-  privateKey: privateKey,
-});
 
 // Importing JWT Packages
 const expressJwt = require("express-jwt");
 const jwt = require("jsonwebtoken");
-
-const MSG_TO_SIGN = process.env.MSG_TO_SIGN;
-// console.log(MSG_TO_SIGN);
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 const app = express();
 app.use(cors());
@@ -44,9 +34,6 @@ const db = new sqlite3.Database("chat_database.db", (err) => {
     console.log("Connected to the database");
   }
 });
-
-// const sqlite3TronData = require("sqlite3").verbose();
-const tronDataDB = new sqlite3.Database("tronData.db");
 
 // Authorization middleware to protect routes
 app.use(
@@ -114,46 +101,23 @@ app.get("/", (req, res) => {
   res.send("Welcome to ChainQ!");
 });
 
-const isPlanActive = async (userAddress) => {
-  try {
-    const connectedContract = await tronWeb.contract(abi, CONTRACT_ADDRESS);
-
-    // console.log("Connected to contract:", connectedContract);
-    // TLEtshxJESLRGLDMt4h8U2Ja9SfaqG8nkq
-    //4170a8c82203ea758aa490dbe96ad9e9c2b166f8c7
-
-    let txget = await connectedContract
-      .getSubscriptionStatus(userAddress)
-      .call();
-
-    // console.log("Subscription Status:", txget.hasSubscription);
-    return txget.hasSubscription;
-  } catch (error) {
-    console.error("An error occurred:", error.message);
-    return error.message;
-  }
-};
-
-// isPlanActive()
-//   .then(() => {
-//     console.log("Function completed successfully.");
-//   })
-//   .catch((error) => {
-//     console.error("Unhandled promise rejection:", error.message);
-//   });
-
 // ---------------------------------------------------------------------- Insert Queries
 
 // Add user (add user to user table) or login user
-app.post("/login", (req, res) => {
+app.post("/login", async (req, res) => {
   const { userAddress, signature } = req.body;
 
+  // const hasPlan = await isPlanActive(userAddress);
+  // console.log(`is it ${hasPlan}`);
+
   try {
-    const address = TronWeb.Trx.verifyMessageV2(MSG_TO_SIGN, signature);
-    if (address !== userAddress) {
+    const isValid = verifySign(userAddress, signature);
+    // console.log(hasPlan);
+    if (!isValid) {
       return res.status(401).json({ message: "Invalid Signature" });
     }
   } catch (err) {
+    console.log(err);
     return res
       .status(401)
       .json({ message: "INVALID_ARGUMENT: Invalid Signature size(bytes)" });
@@ -196,223 +160,6 @@ app.post("/login", (req, res) => {
     }
   );
 });
-
-function isSelectQuery(query) {
-  // Simple check to see if the query starts with "SELECT" (case-insensitive)
-  return /^SELECT/i.test(query.trim());
-}
-
-const executeQuery = async (query) => {
-  try {
-    return await new Promise((resolve, reject) => {
-      tronDataDB.all(query, (err, queryResult) => {
-        if (err) {
-          console.error(err);
-          reject(err);
-        } else {
-          resolve(queryResult);
-        }
-      });
-    });
-  } catch (error) {
-    console.error("An error occurred:", error);
-  }
-};
-
-// async function gett() {
-//   console.log(
-//     await executeQuery(
-//       "SELECT blockHash\nFROM blocks\nORDER BY blockNumber DESC\nLIMIT 10;"
-//     )
-//   );
-// }
-// gett();
-
-// Function to check if a query is a SELECT query
-function isSelectQuery(query) {
-  // Simple check to see if the query starts with "SELECT" (case-insensitive)
-  return /^SELECT/i.test(query.trim());
-}
-
-// Function to generate the response (It will talk to OPEN AI APIs)
-const generateResponse = async (
-  queryToTranslate,
-  userAddress,
-  dappAddress,
-  chatHistory = []
-) => {
-  console.log(`coming up: ${chatHistory}`);
-  // Define the constant part of the user prompt and system prompt
-  const systemPrompt =
-    "you are a text-to-SQL translator. You write SQLite3 code based on plain-language prompts.";
-  // const userPromptTemplate =
-  //   " - Language SQLite3\n - There are 2 tables namely: blocks, transaction_data, \n - columns for block_data = [\n    blockHash TEXT,\n    parentHash TEXT,\n    blockNumber INTEGER PRIMARY KEY,\n    timeStamp INTEGER,\n    baseFeePerGas INTEGER,\n    difficulty TEXT,\n    logsBloom TEXT,\n    miner TEXT,\n    mixHash TEXT,\n    nonce TEXT,\n    receiptsRoot TEXT,\n    sha3Uncles TEXT,\n    size INTEGER,\n    stateRoot TEXT,\n    totalDifficulty TEXT,\n    transactionsRoot TEXT,\n    uncles TEXT,\n    gasLimit TEXT,\n    gasUsed INTEGER,\n    extraData TEXT],\n\n    - columns for transaction_data: [\n    blockHash TEXT,\n    blockNumber INTEGER,\n    fromAddress TEXT,\n    gas INTEGER,\n    gasPrice INTEGER,\n    hash TEXT,\n    input TEXT,\n    maxFeePerGas INTEGER,\n    maxPriorityFeePerGas INTEGER,\n    nonce INTEGER,\n    r TEXT,\n    s TEXT,\n    toAddress TEXT,\n    transactionIndex INTEGER,\n    type TEXT,\n    v INTEGER,\n    value TEXT\n    ]\n    - these are the only columns, never give output outside from this column\n    - Block_data table consists of data of a blockchain's block data\n    - transaction_data consists of transaction data\nYou are a SQL code translator. Your role is to translate natural language to SQLite3 query. Your only output should be SQL code. Do not include any other text. Only SQL code. And for every SQL query you generate the limit should be 10";
-
-  const userPromptTemplate = `
-    - Language: SQLite3
-    - There are 2 tables: blocks and transactions
-    - Columns for 'blocks' table:
-      - blockHash TEXT PRIMARY KEY
-      - parentHash TEXT
-      - blockNumber INTEGER
-      - timestamp TEXT
-      - witnessAddress TEXT
-      - version INTEGER
-      - witnessSignature TEXT
-  
-    - Columns for 'transactions' table:
-      - txID TEXT PRIMARY KEY
-      - blockHash TEXT
-      - blockNumber INTEGER
-      - fromAddress TEXT
-      - gasPrice INTEGER
-      - result TEXT
-      - input TEXT
-      - stakedAssetReleasedBalance INTEGER
-      - resource TEXT
-      - timestamp TEXT
-      - expiration TEXT
-      - toAddress TEXT
-      - amount REAL
-      - feeLimit REAL
-      - type TEXT
-      - ownerAddress TEXT
-      - contractAddress TEXT
-      - resourcesTakenFromAddress TEXT
-      - contractData TEXT
-  
-    - These are the only columns, never give output outside this column
-    - 'blocks' table consists of data from Tron blockchain's block data
-    - 'transactions' consists of transaction data
-    - Please ensure that you consider the following guidelines when generating responses to prompts:
-    
-    
-
-   
-    
-  
-  You are a SQL code translator. Your role is to translate natural language to SQLite3 queries. Your only output should be SQL code. Do not include any other text. Only SQL code. 
-  - Very important for every sql query the limit should be 10 only(everytime).
-  - very important: Always make a SELECT query only (Read only queries) (never make write queries)
-  `;
-
-  const userPromptTemplateForDapp = `
-    - Language: SQLite3
-    - There are 2 tables: blocks and transactions
-    - Columns for 'blocks' table:
-      - blockHash TEXT PRIMARY KEY
-      - parentHash TEXT
-      - blockNumber INTEGER
-      - timestamp TEXT
-      - witnessAddress TEXT
-      - version INTEGER
-      - witnessSignature TEXT
-  
-    - Columns for 'transactions' table:
-      - txID TEXT PRIMARY KEY
-      - blockHash TEXT
-      - blockNumber INTEGER
-      - fromAddress TEXT
-      - gasPrice INTEGER
-      - result TEXT
-      - input TEXT
-      - stakedAssetReleasedBalance INTEGER
-      - resource TEXT
-      - timestamp TEXT
-      - expiration TEXT
-      - toAddress TEXT
-      - amount REAL
-      - feeLimit REAL
-      - type TEXT
-      - ownerAddress TEXT
-      - contractAddress TEXT
-      - resourcesTakenFromAddress TEXT
-      - contractData TEXT
-  
-    - These are the only columns; never give output outside this column.
-    - 'blocks' table consists of data from Tron blockchain's block data.
-    - 'transactions' consists of transaction data.
-    - Please ensure that you consider the following guidelines when generating responses to prompts:
-
-    1. Whenever the prompt makes reference to a personal entity, which includes mentions of "me," "mine," "my," "my EOA" (Externally Owned Account), or "my Address," please replace these references with the designated variable ${userAddress} and if only and only if there is this personal reference like this, then focus on utilizing the fields from the transactions table that correspond to both ${userAddress} and ${dappAddress}. Check transactions involving both addresses as follows:
-    - (fromAddress = ${userAddress} OR toAddress = ${userAddress} OR ownerAddress = ${userAddress}) 
-      AND 
-      (fromAddress = ${dappAddress} OR toAddress = ${dappAddress} OR ownerAddress = ${dappAddress})
-
-    2. The purpose of using ${userAddress} and ${dappAddress} is to create a SQL query. Specifically, use these variables as the central points of reference when constructing SQL queries.
-    
-    3. The query should refer to both ${userAddress} and ${dappAddress} simultaneously, ensuring that transactions involving either of these addresses are considered.
-
-  You are a SQL code translator. Your role is to translate natural language to SQLite3 queries. Your only output should be SQL code. Do not include any other text. Only SQL code. And for every SQL query you generate, the limit should be 10.
-`;
-
-  try {
-    let userPrompt;
-
-    // error code (when token limit gets exceeded)
-    /* if (dappAddress) {
-      userPrompt = `${userPromptTemplateForDapp}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.\n${chatHistory.join(
-        "\n"
-      )}`;
-    } else {
-      userPrompt = `${userPromptTemplate}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.\n${chatHistory.join(
-        "\n"
-      )}`;
-    }
-
-    // Define the conversation for OpenAI
-    const conversation = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ]; */
-
-    if (dappAddress) {
-      userPrompt = `${userPromptTemplateForDapp}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.`;
-    } else {
-      userPrompt = `${userPromptTemplate}\nTranslate "${queryToTranslate}" to a syntactically-correct SQLite3 query.`;
-    }
-
-    // Get the last user message from chatHistory
-    const lastUserMessage =
-      chatHistory.length > 0 ? chatHistory[chatHistory.length - 1] : "";
-
-    // Define the conversation with the system prompt, user prompt, and last user message
-    const conversation = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-      { role: "user", content: lastUserMessage },
-    ];
-    // Call OpenAI to get the translation
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: conversation,
-    });
-
-    // Extract the translated SQL code from the response
-    const sqlCode = completion.choices[0].message.content;
-
-    return sqlCode;
-  } catch (error) {
-    console.error(error);
-    console.log(`chatHistory ${chatHistory}`);
-    console.log(`chatHistory len ${chatHistory.length}`);
-    // Retry with modified chatHistory if an error occurs
-    if (chatHistory.length >= 0) {
-      // Remove the last response text but keep the prompt text
-
-      console.log(chatHistory.promptText);
-      return generateResponse(
-        queryToTranslate,
-        userAddress,
-        dappAddress,
-        chatHistory.promptText
-      );
-    } else {
-      // No more chat history to remove, return an error message
-      return "An error occurred with the OpenAI API.";
-    }
-  }
-};
 
 // chat endpoint
 app.post("/chat", async (req, res) => {
@@ -929,24 +676,6 @@ app.get("/getChatData/:chatId", (req, res) => {
     }
   );
 });
-
-// // Execute SQL SELECT query endpoint (no authentication required)
-// app.post("/executeQuery", (req, res) => {
-//   const { query } = req.body;
-
-//   // Check if the query is a SELECT query
-//   if (!isSelectQuery(query)) {
-//     return res.status(400).json({ message: "Only SELECT queries are allowed" });
-//   }
-
-//   // Execute the SELECT query on the tronData.db database
-//   tronDataDB.all(query, (err, result) => {
-//     if (err) {
-//       return res.status(500).json({ message: "Error executing query" });
-//     }
-//     res.status(200).json({ result });
-//   });
-// });
 
 // dummy chat endpoint to save open AI creds (only for testing purpose)(same as /chat endpoint)
 app.post("/dummyChat", async (req, res) => {
